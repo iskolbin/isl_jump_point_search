@@ -195,7 +195,7 @@ isljps_node *isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_n
 #define ISLJPS_MAX(x,y) ((x)>(y)?(x):(y))
 #define ISLJPS_SQRT2 (1.4142135623730951)
 
-static int isljps_is_node_walkable( isljps_graph *graph, isljps_coord x, isljps_coord y, isljps_mask mask ) {
+static int isljps__is_node_walkable( isljps_graph *graph, isljps_coord x, isljps_coord y, isljps_mask mask ) {
 	isljps_node *node = ISLJPS_GET_NODE_OR_NULL( graph, x, y );
 	if ( node == NULL ) {
 		return 0;
@@ -215,21 +215,21 @@ static isljps_node *isljps__jump( isljps_graph *graph, isljps_node *node, isljps
 		isljps_coord dx = x - parent->x;
 		isljps_coord dy = y - parent->x;
 		if ( dx != 0 && dy != 0 ) {
-			if ((isljps_is_node_walkable(graph, x + dx, y + dy, mask ) && !(isljps_is_node_walkable(graph, x + dx, y + dy, mask ))) ||
-					(isljps_is_node_walkable(graph, x + dx, y - dy, mask ) && !(isljps_is_node_walkable(graph, x, y - dy, mask ))) ||
+			if ((isljps__is_node_walkable(graph, x + dx, y + dy, mask ) && !(isljps__is_node_walkable(graph, x + dx, y + dy, mask ))) ||
+					(isljps__is_node_walkable(graph, x + dx, y - dy, mask ) && !(isljps__is_node_walkable(graph, x, y - dy, mask ))) ||
 					(isljps__jump( graph, ISLJPS_GET_NODE_OR_NULL( graph, x + dx, y ), node, finish, mask ) != NULL) ||
 					(isljps__jump( graph, ISLJPS_GET_NODE_OR_NULL( graph, x, y + dy ), node, finish, mask ) != NULL)) {
 				return node;
 			}	
 		} else {
 			if ( dx != 0 ) {
-				if ((isljps_is_node_walkable(graph, x + dx, y + 1, mask ) && !isljps_is_node_walkable(graph, x, y + 1, mask )) ||
-						(isljps_is_node_walkable(graph, x + dx, y - 1, mask ) && !isljps_is_node_walkable(graph, x, y - 1, mask ))) {
+				if ((isljps__is_node_walkable(graph, x + dx, y + 1, mask ) && !isljps__is_node_walkable(graph, x, y + 1, mask )) ||
+						(isljps__is_node_walkable(graph, x + dx, y - 1, mask ) && !isljps__is_node_walkable(graph, x, y - 1, mask ))) {
 					return node;
 				}
 			} else {
-				if ((isljps_is_node_walkable(graph, x + 1, y + dy, mask ) && !isljps_is_node_walkable(graph, x + 1, y, mask )) ||
-						(isljps_is_node_walkable(graph, x - 1, y + dy, mask ) && !isljps_is_node_walkable(graph, x - 1, y, mask ))) {
+				if ((isljps__is_node_walkable(graph, x + 1, y + dy, mask ) && !isljps__is_node_walkable(graph, x + 1, y, mask )) ||
+						(isljps__is_node_walkable(graph, x - 1, y + dy, mask ) && !isljps__is_node_walkable(graph, x - 1, y, mask ))) {
 					return node;
 				}
 			}
@@ -248,31 +248,31 @@ int isljps_default_neighbors( isljps_graph *graph, isljps_node *node, isljps_mas
 		dx = dx / ISLJPS_MAX( ISLJPS_ABS( dx ), 1 ); 
 		dy = dy / ISLJPS_MAX( ISLJPS_ABS( dy ), 1 );
 		if ( dx != 0 && dy != 0 ) {
-			if ( isljps_is_node_walkable(graph, x, y + dy, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x, y + dy );
-			if ( isljps_is_node_walkable(graph, x + dx, y, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y );
-			if ( isljps_is_node_walkable(graph, x + dx, y + dy, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y + dy );
-			if ( !isljps_is_node_walkable(graph, x - dx, y, mask ) && ISLJPS_HAS_NODE( graph, x - dx, y + dy )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - dx, y + dy );
-			if ( !isljps_is_node_walkable(graph, x, y - dy, mask ) && ISLJPS_HAS_NODE( graph, x + dx, y - dy )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y - dy );
+			if ( isljps__is_node_walkable(graph, x, y + dy, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x, y + dy );
+			if ( isljps__is_node_walkable(graph, x + dx, y, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y );
+			if ( isljps__is_node_walkable(graph, x + dx, y + dy, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y + dy );
+			if ( !isljps__is_node_walkable(graph, x - dx, y, mask ) && ISLJPS_HAS_NODE( graph, x - dx, y + dy )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - dx, y + dy );
+			if ( !isljps__is_node_walkable(graph, x, y - dy, mask ) && ISLJPS_HAS_NODE( graph, x + dx, y - dy )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y - dy );
 		} else {
 			if ( dx == 0 ) {
-				if ( isljps_is_node_walkable(graph, x, y + dy , mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x, y + dy );
-				if ( !isljps_is_node_walkable(graph, x + 1, y , mask ) && ISLJPS_HAS_NODE( graph, x + 1, y + dy)) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y + dy );
-				if ( !isljps_is_node_walkable(graph, x - 1, y , mask ) && ISLJPS_HAS_NODE( graph, x - 1, y + dy)) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - 1, y + dy );
+				if ( isljps__is_node_walkable(graph, x, y + dy , mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x, y + dy );
+				if ( !isljps__is_node_walkable(graph, x + 1, y , mask ) && ISLJPS_HAS_NODE( graph, x + 1, y + dy)) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y + dy );
+				if ( !isljps__is_node_walkable(graph, x - 1, y , mask ) && ISLJPS_HAS_NODE( graph, x - 1, y + dy)) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - 1, y + dy );
 			} else {
-				if ( isljps_is_node_walkable(graph, x + dx, y , mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y );
-				if ( !isljps_is_node_walkable(graph, x, y + 1 , mask ) && ISLJPS_HAS_NODE( graph, x + dx, y + 1)) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y + 1 );
-				if ( !isljps_is_node_walkable(graph, x, y - 1 , mask ) && ISLJPS_HAS_NODE( graph, x + dx, y - 1)) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y - 1 );
+				if ( isljps__is_node_walkable(graph, x + dx, y , mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y );
+				if ( !isljps__is_node_walkable(graph, x, y + 1 , mask ) && ISLJPS_HAS_NODE( graph, x + dx, y + 1)) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y + 1 );
+				if ( !isljps__is_node_walkable(graph, x, y - 1 , mask ) && ISLJPS_HAS_NODE( graph, x + dx, y - 1)) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + dx, y - 1 );
 			}
 		}
 	} else {
-		if ( isljps_is_node_walkable(graph, x + 1, y, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y );
-		if ( isljps_is_node_walkable(graph, x - 1, y, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - 1, y );
-		if ( isljps_is_node_walkable(graph, x, y + 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x, y + 1 );
-		if ( isljps_is_node_walkable(graph, x, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x, y - 1 );
-		if ( isljps_is_node_walkable(graph, x + 1, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y - 1 );
-		if ( isljps_is_node_walkable(graph, x - 1, y + 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - 1, y + 1 );
-		if ( isljps_is_node_walkable(graph, x - 1, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y - 1 );
-		if ( isljps_is_node_walkable(graph, x + 1, y + 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y + 1 );
+		if ( isljps__is_node_walkable(graph, x + 1, y, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y );
+		if ( isljps__is_node_walkable(graph, x - 1, y, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - 1, y );
+		if ( isljps__is_node_walkable(graph, x, y + 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x, y + 1 );
+		if ( isljps__is_node_walkable(graph, x, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x, y - 1 );
+		if ( isljps__is_node_walkable(graph, x + 1, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y - 1 );
+		if ( isljps__is_node_walkable(graph, x - 1, y + 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - 1, y + 1 );
+		if ( isljps__is_node_walkable(graph, x - 1, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y - 1 );
+		if ( isljps__is_node_walkable(graph, x + 1, y + 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y + 1 );
 	}
 	return count;
 }
