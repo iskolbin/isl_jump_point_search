@@ -84,7 +84,6 @@ typedef isljps_cost (*isljps_cost_fun)( isljps_graph *, isljps_node *, isljps_no
 
 typedef struct {
 	isljps_neighbors get_neighbors;
-	isljps_cost_fun eval_cost;
 	isljps_cost_fun eval_jump_cost;
 	isljps_cost_fun eval_heuristic;
 } isljps_properties;
@@ -97,7 +96,8 @@ ISLJPS_DEF isljps_node *isljps_find_path( isljps_graph *graph, isljps_node *star
 ISLJPS_DEF int isljps_default_neighbors( isljps_graph *graph, isljps_node *node, isljps_mask mask, isljps_node *neighbors_out[] );
 ISLJPS_DEF isljps_cost isljps_default_jump_cost( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
 ISLJPS_DEF isljps_cost isljps_heuristic_euclidean( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
-// TODO implement other heuristics: manhattan, chebyshev
+ISLJPS_DEF isljps_cost isljps_heuristic_manhattan( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
+ISLJPS_DEF isljps_cost isljps_heuristic_chebyshev( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
 
 #ifdef __cplusplus
 }
@@ -105,7 +105,6 @@ ISLJPS_DEF isljps_cost isljps_heuristic_euclidean( isljps_graph *graph, isljps_n
 
 static isljps_properties isljps_default_properties = {
 	isljps_default_neighbors,
-	isljps_default_jump_cost,
 	isljps_default_jump_cost,
 	isljps_heuristic_euclidean };
 
@@ -167,7 +166,6 @@ isljps_node *isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_n
 		count = properties->get_neighbors( graph, node, mask, neighbors );
 
 		for( i = 0; i < count; i++ ) {
-			//if ( eval_cost( graph, node, neighbors[i], mask ) != ISLJPS_MAX_COST ) {
 				isljps_node *jump_node = isljps__jump( graph, neighbors[i], node, finish, mask );
 				if ( jump_node != NULL ) {
 					if ( !(jump_node->status & ISLJPS_NODE_CLOSED) ) {
@@ -187,7 +185,6 @@ isljps_node *isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_n
 						}
 					}
 				}
-			//}
 		}
 	}
 
@@ -281,15 +278,33 @@ int isljps_default_neighbors( isljps_graph *graph, isljps_node *node, isljps_mas
 }
 
 isljps_cost isljps_default_jump_cost( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask ) {	
-	isljps_coord dx = ISLJPS_ABS( node1->x - node2->x );
-	isljps_coord dy = ISLJPS_ABS( node1->y - node2->y );
+	isljps_coord dx = node1->x - node2->x;
+	isljps_coord dy = node1->y - node2->y;
+	dx = ISLJPS_ABS( dx );
+	dy = ISLJPS_ABS( dy );
 	return (dx<dy) ? ISLJPS_SQRT2 * dx + dy : ISLJPS_SQRT2 * dx + dy;
+}
+
+isljps_cost isljps_heuristic_manhattan( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask ) {
+	isljps_coord dx = ( node1->x - node2->x );
+	isljps_coord dy = ( node1->y - node2->y );
+	dx = ISLJPS_ABS( dx );
+	dy = ISLJPS_ABS( dy );
+	return dx + dy;
 }
 
 isljps_cost isljps_heuristic_euclidean( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask ) {
 	isljps_coord dx = ( node1->x - node2->x );
 	isljps_coord dy = ( node1->y - node2->y );
 	return ISLJPS_SQRT( dx*dx + dy*dy );
+}
+
+isljps_cost isljps_heuristic_chebyshev( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask ) {
+	isljps_coord dx = ( node1->x - node2->x );
+	isljps_coord dy = ( node1->y - node2->y );
+	dx = ISLJPS_ABS( dx );
+	dy = ISLJPS_ABS( dy );
+	return ISLJPS_MAX( dx, dy );
 }
 
 #endif // ISL_JUMP_POINT_SEARCH_IMPLEMENTATION
