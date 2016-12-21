@@ -20,7 +20,7 @@
 #endif
 
 #ifndef ISLJPS_NODE_DATA
-	#define ISLJPS_NODE_DATA const void* data;
+	#define ISLJPS_NODE_DATA
 #endif
 
 #ifndef ISLJPS_MAX_NEIGHBORS
@@ -36,7 +36,6 @@
 	#define ISLJPS_COORDS(x,y) isljps_coord x; isljps_coord y;
 #endif
 
-// TODO move to functions?
 #define ISLJPS_HAS_NODE(graph,x,y) ((x) >= 0 && (y) >= 0 && (x) < ((graph)->width) && y < ((graph)->height))
 #define ISLJPS_GET_NODE(graph,x,y) ((graph)->nodes + ((y) * (graph)->width) + (x))
 #define ISLJPS_GET_NODE_OR_NULL(graph,x,y) (ISLJPS_HAS_NODE((graph),(x),(y)) ? ISLJPS_GET_NODE(graph,x,y) : NULL)
@@ -52,6 +51,15 @@
 	typedef ISLJPS_MASK isljps_mask;
 #endif
 
+#if !defined(ISLJPS_MALLOC)&&!defined(ISLJPS_REALLOC)&&!defined(ISLJPS_FREE)
+	#include <stdlib.h>
+	#define ISLJPS_MALLOC malloc
+	#define ISLJPS_REALLOC realloc
+	#define ISLJPS_FREE free
+#elif !defined(ISLJPS_MALLOC)||!defined(ISLJPS_REALLOC)||!defined(ISLJPS_FREE)
+	#error "You must to define ISLJPS_MALLOC, ISLJPS_REALLOC, ISLJPS_FREE to remove stdlib dependency"
+#endif
+
 #define ISLJPS_MASK_DIAG_0  1
 #define ISLJPS_MASK_DIAG_1  2
 #define ISLJPS_MASK_DIAG_2  3
@@ -64,14 +72,15 @@ typedef enum {
 typedef struct isljps_node isljps_node;
 
 struct isljps_node {
+	ISLJPS_NODE_DATA
+	ISLJPS_COORDS(x,y)
+	size_t index;
 	isljps_mask mask;
 	isljps_cost g;
 	isljps_cost h;
 	isljps_cost f;
 	isljps_node_status status;
 	isljps_node *parent;
-	ISLJPS_COORDS(x,y)
-	ISLJPS_NODE_DATA
 };
 
 typedef struct {
@@ -92,7 +101,7 @@ typedef struct {
 extern "C" {
 #endif
 
-ISLJPS_DEF isljps_node *isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties );
+ISLJPS_DEF isljps_node **isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties );
 ISLJPS_DEF int isljps_default_neighbors( isljps_graph *graph, isljps_node *node, isljps_mask mask, isljps_node *neighbors_out[] );
 ISLJPS_DEF isljps_cost isljps_default_jump_cost( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
 ISLJPS_DEF isljps_cost isljps_heuristic_euclidean( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
@@ -112,38 +121,173 @@ static isljps_properties isljps_default_properties = {
 
 #ifdef ISL_JUMP_POINT_SEARCH_IMPLEMENTATION
 
-// TODO: Binary heap implenentation
+#define ISLJPS_ABS(x) ((x)>0?(x):-(x)) 
+#define ISLJPS_MAX(x,y) ((x)>(y)?(x):(y))
+#define ISLJPS_SQRT2 (1.4142135623730951)
+
+// Binary heap implementation for fast open list
+
 typedef struct {
 	isljps_node **nodes;
+	size_t allocated;
 	size_t length;
 } isljps__heap;
 
-// TODO 
 static isljps__heap *isljps__heap_create( size_t n ) {
-	return NULL;
+	isljps__heap *heap = ISLJPS_MALLOC( sizeof *heap );
+	n = n <= 0 ? 1 : n;
+	heap->nodes = ISLJPS_MALLOC( n * sizeof( *heap->nodes ));
+	heap->allocated = n;
+	heap->length = 0;
+	return heap;
 }
 
-// TODO 
+static void isljps__heap_destroy( isljps__heap *heap ) {
+	ISLJPS_FREE( heap->nodes );
+	ISLJPS_FREE( heap );
+}
+
+static int isljps__heap_grow( isljps__heap *heap, size_t newalloc ) {
+	isljps_node **newnodes = ISLJPS_REALLOC( heap->nodes, sizeof( *heap->nodes ) * newalloc );
+	if ( newnodes != NULL ) {
+		heap->allocated = newalloc;
+		heap->nodes = newnodes;
+		return 0;
+	} else {
+		return 1;
+	}
+}
+
+static void isljps__heap_swap( isljps__heap *heap, size_t index1, size_t index2 ) {
+	isljps_node *tmp = heap->nodes[index1];
+	heap->nodes[index1] = heap->nodes[index2];
+	heap->nodes[index2] = tmp;
+	heap->nodes[index1]->index = index1;
+	heap->nodes[index2]->index = index2;
+}
+
+static size_t isljps__heap_siftup( isljps__heap *heap, size_t index ) {
+	size_t parent = (index-1) >> 1;
+	while ( index > 0 && heap->nodes[index]->f < heap->nodes[parent]->f ) {
+		isljps__heap_swap( heap, index, parent );
+		index = parent;
+		parent = (index-1) >> 1;	
+	}
+	return index;
+}
+
+static void isljps__heap_siftdown_floyd( isljps__heap *heap, size_t index ) {
+	size_t left = (index << 1) + 1;
+	size_t right = left + 1;
+	while ( left < heap->length ) {
+		size_t higher = ( right < heap->length && heap->nodes[right]->f < heap->nodes[left]->f ) ? right : left;
+		isljps__heap_swap( heap, index, higher );
+		index = higher;
+		left = (index << 1) + 1;
+		right = left + 1;
+	}
+	isljps__heap_siftup( heap, index );
+}
+
+static void isljps__heap_siftdown( isljps__heap *heap, size_t index ) {
+	size_t left = (index << 1) + 1;
+	size_t right = left + 1;
+	while ( left < heap->length ) {
+		size_t higher = ( right < heap->length && heap->nodes[right]->f < heap->nodes[left]->f ) ? right : left;
+		if ( heap->nodes[index]->f < heap->nodes[higher]->f ) 
+			break;
+		isljps__heap_swap( heap, index, higher );
+		index = higher;
+		left = (index << 1) + 1;
+		right = left + 1;
+	}
+}
+
 static void isljps__heap_enqueue( isljps__heap *heap, isljps_node *node ) {
+	size_t index = heap->length;
+	if ( heap->allocated <= heap->length ) {
+		if ( isljps__heap_grow( heap, heap->allocated * 2 )) {
+			return;
+		}
+	}
+	heap->nodes[index] = node;
+	heap->length++;
+	index = isljps__heap_siftup( heap, index );
 }
 
-// TODO 
 static isljps_node *isljps__heap_dequeue( isljps__heap *heap ) {
-	return NULL;
+	if ( heap->length == 0 ) {
+		return NULL;
+	} else if ( heap->length == 1 ) {
+		heap->length = 0;
+		return heap->nodes[0];
+	} else {
+		isljps_node *node = heap->nodes[0];
+		isljps__heap_swap( heap, 0, --heap->length );
+		isljps__heap_siftdown_floyd( heap, 0 );
+		return node;
+	}
 }
 
-// TODO 
 static void isljps__heap_update( isljps__heap *heap, isljps_node *node ) {
+	isljps__heap_siftdown( heap, isljps__heap_siftup( heap, node->index ));
 }
 
-// TODO 
-static isljps_node *isljps__expand_path( isljps_graph *graph, isljps_node *finish ) {
-	return NULL;
+// End of binary heap implementation
+
+static isljps_node **isljps__expand_path( isljps_graph *graph, isljps_node *start, isljps_node *finish ) {
+	int allocated = (int) ISLJPS_SQRT((start->x-finish->x)*(start->x-finish->x) + (start->y-finish->y)*(start->y-finish->y));
+	if ( allocated < 2 ) {
+		return NULL;
+	} else {
+		isljps_node **path = ISLJPS_MALLOC( allocated );	
+		isljps_node *node = finish;
+		isljps_node *parent = node->parent;
+		int length = 0;
+		while ( parent != NULL ) {
+			isljps_coord x0 = node->x;
+			isljps_coord y0 = node->y;
+			isljps_coord x1 = parent->x;
+			isljps_coord y1 = parent->y;
+			isljps_coord dx = ISLJPS_ABS( x0 - x1 );
+			isljps_coord dy = ISLJPS_ABS( y0 - y1 );
+			isljps_coord sx = x0 < x1 ? 1 : -1;
+			isljps_coord sy = y0 < y1 ? 1 : -1;
+			isljps_coord err = dx - dy;
+			isljps_coord e2;
+
+			if ( length >= allocated ) {
+				path = ISLJPS_REALLOC( path, allocated * 2 * sizeof( *path ));
+				allocated = allocated * 2;
+			}
+			
+			// Perform Bresenham's line algorithm to interpolate nodes between jump nodes
+			while (x0 != x1 && y0 != y1) {
+				path[length++] = ISLJPS_GET_NODE( graph, x0, y0 );
+
+				e2 = 2 * err;
+				if (e2 > -dy) {
+					err = err - dy;
+					x0 += sx;
+				}
+				if (e2 < dx) {
+					err = err + dx;
+					y0 += sy;
+				}
+			}
+
+			path[length++] = parent;
+			
+			node = parent;
+			parent = node->parent;
+		}
+		return path;
+	}
 }
 
 static isljps_node *isljps__jump( isljps_graph *graph, isljps_node *node, isljps_node *parent, isljps_node *finish, isljps_mask mask );
 
-isljps_node *isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties ) {
+isljps_node **isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties ) {
 	isljps__heap *openlist = isljps__heap_create( 8 );
 	start->g = 0;
 	start->f = 0;
@@ -160,7 +304,8 @@ isljps_node *isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_n
 		node->status |= ISLJPS_NODE_CLOSED;
 
 		if ( node == finish ) {
-			return isljps__expand_path( graph, finish );
+			isljps__heap_destroy( openlist );
+			return isljps__expand_path( graph, start, finish );
 		}
 
 		count = properties->get_neighbors( graph, node, mask, neighbors );
@@ -188,12 +333,10 @@ isljps_node *isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_n
 		}
 	}
 
+	isljps__heap_destroy( openlist );
+
 	return NULL;
 }
-
-#define ISLJPS_ABS(x) ((x)>0?(x):-(x)) 
-#define ISLJPS_MAX(x,y) ((x)>(y)?(x):(y))
-#define ISLJPS_SQRT2 (1.4142135623730951)
 
 static int isljps__is_node_walkable( isljps_graph *graph, isljps_coord x, isljps_coord y, isljps_mask mask ) {
 	isljps_node *node = ISLJPS_GET_NODE_OR_NULL( graph, x, y );
