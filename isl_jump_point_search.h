@@ -69,6 +69,7 @@ typedef enum {
 	ISLJPS_NODE_CLOSED = 1 << 1,
 } isljps_node_status;
 
+#ifndef ISLJPS_NODE
 typedef struct isljps_node isljps_node;
 
 struct isljps_node {
@@ -82,6 +83,9 @@ struct isljps_node {
 	isljps_node_status status;
 	isljps_node *parent;
 };
+#else
+typedef ISLJPS_NODE isljps_node;
+#endif
 
 typedef struct {
 	isljps_node *nodes;
@@ -256,13 +260,13 @@ static isljps_node **isljps__expand_path( isljps_graph *graph, isljps_node *star
 			isljps_coord err = dx - dy;
 			isljps_coord e2;
 
-			if ( length >= allocated ) {
+			if ( length+1 >= allocated ) {
 				path = ISLJPS_REALLOC( path, allocated * 2 * sizeof( *path ));
 				allocated = allocated * 2;
 			}
 			
 			// Perform Bresenham's line algorithm to interpolate nodes between jump nodes
-			while (x0 != x1 && y0 != y1) {
+			while (x0 != x1 || y0 != y1) {
 				path[length++] = ISLJPS_GET_NODE( graph, x0, y0 );
 
 				e2 = 2 * err;
@@ -276,11 +280,10 @@ static isljps_node **isljps__expand_path( isljps_graph *graph, isljps_node *star
 				}
 			}
 
-			path[length++] = parent;
-			
 			node = parent;
 			parent = node->parent;
 		}
+		path[length++] = node;
 		return path;
 	}
 }
@@ -293,7 +296,6 @@ isljps_node **isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_
 	start->f = 0;
 	isljps__heap_enqueue( openlist, start );
 	start->status |= ISLJPS_NODE_OPENED;
-	
 	properties = properties == NULL ? &isljps_default_properties : properties;
 
 	while ( openlist->length > 0 ) {
@@ -309,27 +311,26 @@ isljps_node **isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_
 		}
 
 		count = properties->get_neighbors( graph, node, mask, neighbors );
-
 		for( i = 0; i < count; i++ ) {
-				isljps_node *jump_node = isljps__jump( graph, neighbors[i], node, finish, mask );
-				if ( jump_node != NULL ) {
-					if ( !(jump_node->status & ISLJPS_NODE_CLOSED) ) {
-						isljps_cost d = properties->eval_jump_cost( graph, jump_node, node, mask );	
-						isljps_cost ng = node->g + d;
-						if ( !(jump_node->status & ISLJPS_NODE_OPENED) || ng < jump_node->g ) {
-							jump_node->g = ng;
-							jump_node->h = jump_node->h == 0 ? properties->eval_heuristic( graph, node, jump_node, mask ) : jump_node->h;
-							jump_node->f = jump_node->g + jump_node->h;
-							jump_node->parent = node;
-							if ( !(jump_node->status & ISLJPS_NODE_OPENED )) {
-								isljps__heap_enqueue( openlist, jump_node );
-								jump_node->status |= ISLJPS_NODE_OPENED;
-							} else {
-								isljps__heap_update( openlist, jump_node );
-							}
+			isljps_node *jump_node = isljps__jump( graph, neighbors[i], node, finish, mask );
+			if ( jump_node != NULL ) {
+				if ( !(jump_node->status & ISLJPS_NODE_CLOSED) ) {
+					isljps_cost d = properties->eval_jump_cost( graph, jump_node, node, mask );
+					isljps_cost ng = node->g + d;
+					if ( !(jump_node->status & ISLJPS_NODE_OPENED) || ng < jump_node->g ) {
+						jump_node->g = ng;
+						jump_node->h = jump_node->h == 0 ? properties->eval_heuristic( graph, node, jump_node, mask ) : jump_node->h;
+						jump_node->f = jump_node->g + jump_node->h;
+						jump_node->parent = node;
+						if ( !(jump_node->status & ISLJPS_NODE_OPENED )) {
+							isljps__heap_enqueue( openlist, jump_node );
+							jump_node->status |= ISLJPS_NODE_OPENED;
+						} else {
+							isljps__heap_update( openlist, jump_node );
 						}
 					}
 				}
+			}
 		}
 	}
 
