@@ -105,11 +105,23 @@ typedef struct {
 	isljps_cost_fun eval_heuristic;
 } isljps_properties;
 
+typedef enum {
+	ISLJPS_OK,
+	ISLJPS_BLOCKED,
+	ISLJPS_TRIVIAL,
+	ISLJPS_ERROR_BAD_ALLOC,
+} isljps_status;
+
+typedef struct {
+	isljps_status status;
+	isljps_node **path;
+} isljps_result;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-ISLJPS_DEF isljps_node **isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties );
+ISLJPS_DEF isljps_result isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties );
 ISLJPS_DEF int isljps_default_neighbors( isljps_graph *graph, isljps_node *node, isljps_mask mask, isljps_node *neighbors_out[] );
 ISLJPS_DEF isljps_cost isljps_default_jump_cost( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
 ISLJPS_DEF isljps_cost isljps_heuristic_euclidean( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
@@ -144,9 +156,16 @@ typedef struct {
 static isljps__heap *isljps__heap_create( size_t n ) {
 	isljps__heap *heap = ISLJPS_MALLOC( sizeof *heap );
 	n = n <= 0 ? 1 : n;
-	heap->nodes = ISLJPS_MALLOC( n * sizeof( *heap->nodes ));
-	heap->allocated = n;
-	heap->length = 0;
+	if ( heap != NULL ) {
+		heap->nodes = ISLJPS_MALLOC( n * sizeof( *heap->nodes ));
+		if ( heap->nodes != NULL ) {
+			heap->allocated = n;
+			heap->length = 0;
+		} else {
+			free( heap );
+			heap = NULL;
+		}
+	}
 	return heap;
 }
 
@@ -155,14 +174,14 @@ static void isljps__heap_destroy( isljps__heap *heap ) {
 	ISLJPS_FREE( heap );
 }
 
-static int isljps__heap_grow( isljps__heap *heap, size_t newalloc ) {
+static isljps_status isljps__heap_grow( isljps__heap *heap, size_t newalloc ) {
 	isljps_node **newnodes = ISLJPS_REALLOC( heap->nodes, sizeof( *heap->nodes ) * newalloc );
 	if ( newnodes != NULL ) {
 		heap->allocated = newalloc;
 		heap->nodes = newnodes;
-		return 0;
+		return ISLJPS_OK;
 	} else {
-		return 1;
+		return ISLJPS_ERROR_BAD_ALLOC;
 	}
 }
 
@@ -211,16 +230,17 @@ static void isljps__heap_siftdown( isljps__heap *heap, size_t index ) {
 	}
 }
 
-static void isljps__heap_enqueue( isljps__heap *heap, isljps_node *node ) {
+static isljps_status isljps__heap_enqueue( isljps__heap *heap, isljps_node *node ) {
 	size_t index = heap->length;
 	if ( heap->allocated <= heap->length ) {
-		if ( isljps__heap_grow( heap, heap->allocated * 2 )) {
-			return;
+		if ( isljps__heap_grow( heap, heap->allocated * 2 ) != ISLJPS_OK ) {
+			return ISLJPS_ERROR_BAD_ALLOC;
 		}
 	}
 	heap->nodes[index] = node;
 	heap->length++;
 	index = isljps__heap_siftup( heap, index );
+	return ISLJPS_OK;
 }
 
 static isljps_node *isljps__heap_dequeue( isljps__heap *heap ) {
@@ -243,14 +263,23 @@ static void isljps__heap_update( isljps__heap *heap, isljps_node *node ) {
 
 // End of binary heap implementation
 
-static isljps_node **isljps__expand_path( isljps_graph *graph, isljps_node *start, isljps_node *finish ) {
+static isljps_result isljps__expand_path( isljps_graph *graph, isljps_node *start, isljps_node *finish ) {
+	isljps_result result = {ISLJPS_OK,NULL};
 	int allocated = (int) ISLJPS_SQRT((start->x-finish->x)*(start->x-finish->x) + (start->y-finish->y)*(start->y-finish->y));
 	if ( allocated < 2 ) {
-		return NULL;
+		result.status = ISLJPS_TRIVIAL;
+		return result;
 	} else {
 		isljps_node **path = ISLJPS_MALLOC( allocated );	
 		isljps_node *node = finish;
 		isljps_node *parent = node->parent;
+
+		if ( path == NULL ) {
+			result.status = ISLJPS_ERROR_BAD_ALLOC;
+			return result;
+		}
+
+		result.path = path;
 		int length = 0;
 		while ( parent != NULL ) {
 			isljps_coord x0 = node->x;
@@ -266,6 +295,14 @@ static isljps_node **isljps__expand_path( isljps_graph *graph, isljps_node *star
 
 			if ( length+1 >= allocated ) {
 				path = ISLJPS_REALLOC( path, allocated * 2 * sizeof( *path ));
+				if ( path == NULL ) {
+					free( result.path );
+					result.path = NULL;
+					result.status = ISLJPS_ERROR_BAD_ALLOC;
+					return result;
+				} else {
+					result.path = path;
+				}
 				allocated = allocated * 2;
 			}
 			
@@ -288,17 +325,32 @@ static isljps_node **isljps__expand_path( isljps_graph *graph, isljps_node *star
 			parent = node->parent;
 		}
 		path[length++] = node;
-		return path;
+		return result;
 	}
 }
 
 static isljps_node *isljps__jump( isljps_graph *graph, isljps_node *node, isljps_node *parent, isljps_node *finish, isljps_mask mask );
 
-isljps_node **isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties ) {
+isljps_result isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties ) {
 	isljps__heap *openlist = isljps__heap_create( ISLJPS_MAX_NEIGHBORS );
+	isljps_result result = {ISLJPS_OK,NULL};
+	isljps_status status = ISLJPS_OK;
+
 	start->g = 0;
 	start->f = 0;
-	isljps__heap_enqueue( openlist, start );
+
+	if ( openlist == NULL ) {
+		result.status = ISLJPS_ERROR_BAD_ALLOC; 
+		return result;
+	}
+
+	status = isljps__heap_enqueue( openlist, start );
+	if ( status != ISLJPS_OK ) {
+		result.status = status;
+		isljps__heap_destroy( openlist );
+		return result;
+	}
+
 	start->status |= ISLJPS_NODE_OPENED;
 	properties = properties == NULL ? &isljps_default_properties : properties;
 
@@ -327,7 +379,12 @@ isljps_node **isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_
 						jump_node->f = jump_node->g + jump_node->h;
 						jump_node->parent = node;
 						if ( !(jump_node->status & ISLJPS_NODE_OPENED )) {
-							isljps__heap_enqueue( openlist, jump_node );
+							status = isljps__heap_enqueue( openlist, jump_node );
+							if ( status != ISLJPS_OK ) {
+								result.status = status;
+								isljps__heap_destroy( openlist );
+								return result;
+							}
 							jump_node->status |= ISLJPS_NODE_OPENED;
 						} else {
 							isljps__heap_update( openlist, jump_node );
@@ -338,9 +395,10 @@ isljps_node **isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_
 		}
 	}
 
+	result.status = ISLJPS_BLOCKED;
 	isljps__heap_destroy( openlist );
 
-	return NULL;
+	return result;
 }
 
 static int isljps__is_node_walkable( isljps_graph *graph, isljps_coord x, isljps_coord y, isljps_mask mask ) {
