@@ -87,10 +87,14 @@ struct isljps_node {
 typedef ISLJPS_NODE isljps_node;
 #endif
 
+#ifndef ISLJPS_GRAPH
 typedef struct {
 	isljps_node *nodes;
 	ISLJPS_COORDS(width,height)
 } isljps_graph;
+#else
+typedef ISLJPS_GRAPH isljps_graph;
+#endif
 
 typedef int (*isljps_neighbors)( isljps_graph *, isljps_node *, isljps_mask, isljps_node ** );
 typedef isljps_cost (*isljps_cost_fun)( isljps_graph *, isljps_node *, isljps_node *, isljps_mask mask );
@@ -291,7 +295,7 @@ static isljps_node **isljps__expand_path( isljps_graph *graph, isljps_node *star
 static isljps_node *isljps__jump( isljps_graph *graph, isljps_node *node, isljps_node *parent, isljps_node *finish, isljps_mask mask );
 
 isljps_node **isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties ) {
-	isljps__heap *openlist = isljps__heap_create( 8 );
+	isljps__heap *openlist = isljps__heap_create( ISLJPS_MAX_NEIGHBORS );
 	start->g = 0;
 	start->f = 0;
 	isljps__heap_enqueue( openlist, start );
@@ -415,7 +419,7 @@ int isljps_default_neighbors( isljps_graph *graph, isljps_node *node, isljps_mas
 		if ( isljps__is_node_walkable(graph, x, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x, y - 1 );
 		if ( isljps__is_node_walkable(graph, x + 1, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y - 1 );
 		if ( isljps__is_node_walkable(graph, x - 1, y + 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - 1, y + 1 );
-		if ( isljps__is_node_walkable(graph, x - 1, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y - 1 );
+		if ( isljps__is_node_walkable(graph, x - 1, y - 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x - 1, y - 1 );
 		if ( isljps__is_node_walkable(graph, x + 1, y + 1, mask )) neighbors_out[count++] = ISLJPS_GET_NODE( graph, x + 1, y + 1 );
 	}
 	return count;
