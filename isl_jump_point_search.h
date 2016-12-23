@@ -65,6 +65,7 @@
 #define ISLJPS_MASK_DIAG_2  3
 
 typedef enum {
+	ISLJPS_NODE_DEFAULT,
 	ISLJPS_NODE_OPENED = 1,
 	ISLJPS_NODE_CLOSED = 1 << 1,
 } isljps_node_status;
@@ -75,8 +76,9 @@ typedef struct isljps_node isljps_node;
 struct isljps_node {
 	ISLJPS_NODE_DATA
 	ISLJPS_COORDS(x,y)
-	size_t index;
 	isljps_mask mask;
+
+	size_t index;
 	isljps_cost g;
 	isljps_cost h;
 	isljps_cost f;
@@ -110,11 +112,18 @@ typedef enum {
 	ISLJPS_BLOCKED,
 	ISLJPS_TRIVIAL,
 	ISLJPS_ERROR_BAD_ALLOC,
+	ISLJPS_ERROR_BAD_REALLOC,
 } isljps_status;
 
 typedef struct {
+	isljps_node **nodes;
+	size_t allocated;
+	size_t length;
+} isljps_path;
+
+typedef struct {
 	isljps_status status;
-	isljps_node **path;
+	isljps_path *path;
 } isljps_result;
 
 #ifdef __cplusplus
@@ -122,6 +131,7 @@ extern "C" {
 #endif
 
 ISLJPS_DEF isljps_result isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties );
+ISLJPS_DEF void isljps_destroy_path( isljps_path *path );
 ISLJPS_DEF int isljps_default_neighbors( isljps_graph *graph, isljps_node *node, isljps_mask mask, isljps_node *neighbors_out[] );
 ISLJPS_DEF isljps_cost isljps_default_jump_cost( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
 ISLJPS_DEF isljps_cost isljps_heuristic_euclidean( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask );
@@ -145,36 +155,59 @@ static isljps_properties isljps_default_properties = {
 #define ISLJPS_MAX(x,y) ((x)>(y)?(x):(y))
 #define ISLJPS_SQRT2 (1.4142135623730951)
 
-// Binary heap implementation for fast open list
-
-typedef struct {
-	isljps_node **nodes;
-	size_t allocated;
-	size_t length;
-} isljps__heap;
-
-static isljps__heap *isljps__heap_create( size_t n ) {
-	isljps__heap *heap = ISLJPS_MALLOC( sizeof *heap );
+// Minimal dynamic vector implementation for path storage
+static isljps_path *isljps__path_create( size_t n ) {
+	isljps_path *path = ISLJPS_MALLOC( sizeof *path );
 	n = n <= 0 ? 1 : n;
-	if ( heap != NULL ) {
-		heap->nodes = ISLJPS_MALLOC( n * sizeof( *heap->nodes ));
-		if ( heap->nodes != NULL ) {
-			heap->allocated = n;
-			heap->length = 0;
+	if ( path != NULL ) {
+		path->nodes = ISLJPS_MALLOC( n * sizeof( *path->nodes ));
+		if ( path->nodes != NULL ) {
+			path->allocated = n;
+			path->length = 0;
 		} else {
-			free( heap );
-			heap = NULL;
+			free( path );
+			path = NULL;
 		}
 	}
-	return heap;
+	return path;
 }
 
-static void isljps__heap_destroy( isljps__heap *heap ) {
-	ISLJPS_FREE( heap->nodes );
-	ISLJPS_FREE( heap );
+void isljps_destroy_path( isljps_path *path ) {
+	if ( path != NULL ) {
+		ISLJPS_FREE( path->nodes );
+		ISLJPS_FREE( path );
+	}
 }
 
-static isljps_status isljps__heap_grow( isljps__heap *heap, size_t newalloc ) {
+static isljps_status isljps__path_grow( isljps_path *path, size_t newalloc ) {
+	isljps_node **newnodes = ISLJPS_REALLOC( path->nodes, sizeof( *path->nodes ) * newalloc );
+	if ( newnodes != NULL ) {
+		path->allocated = newalloc;
+		path->nodes = newnodes;
+		return ISLJPS_OK;
+	} else {
+		return ISLJPS_ERROR_BAD_REALLOC;
+	}
+}
+
+static isljps_status isljps__path_push( isljps_path *path, isljps_node *node ) {
+	size_t index = path->length;
+	isljps_status status = ISLJPS_OK;
+	if ( path->allocated <= path->length ) {
+		status = isljps__path_grow( path, path->allocated * 2 );
+		if ( status != ISLJPS_OK ) {
+			return status;
+		}
+	}
+	path->nodes[index] = node;
+	path->length++;
+	return status;
+}
+// End of dynamic vector implementation for path storage
+
+
+// Binary heap implementation for fast open list
+static isljps_status isljps__heap_grow( isljps_path *heap, size_t newalloc ) {
 	isljps_node **newnodes = ISLJPS_REALLOC( heap->nodes, sizeof( *heap->nodes ) * newalloc );
 	if ( newnodes != NULL ) {
 		heap->allocated = newalloc;
@@ -185,7 +218,7 @@ static isljps_status isljps__heap_grow( isljps__heap *heap, size_t newalloc ) {
 	}
 }
 
-static void isljps__heap_swap( isljps__heap *heap, size_t index1, size_t index2 ) {
+static void isljps__heap_swap( isljps_path *heap, size_t index1, size_t index2 ) {
 	isljps_node *tmp = heap->nodes[index1];
 	heap->nodes[index1] = heap->nodes[index2];
 	heap->nodes[index2] = tmp;
@@ -193,7 +226,7 @@ static void isljps__heap_swap( isljps__heap *heap, size_t index1, size_t index2 
 	heap->nodes[index2]->index = index2;
 }
 
-static size_t isljps__heap_siftup( isljps__heap *heap, size_t index ) {
+static size_t isljps__heap_siftup( isljps_path *heap, size_t index ) {
 	size_t parent = (index-1) >> 1;
 	while ( index > 0 && heap->nodes[index]->f < heap->nodes[parent]->f ) {
 		isljps__heap_swap( heap, index, parent );
@@ -203,7 +236,7 @@ static size_t isljps__heap_siftup( isljps__heap *heap, size_t index ) {
 	return index;
 }
 
-static void isljps__heap_siftdown_floyd( isljps__heap *heap, size_t index ) {
+static void isljps__heap_siftdown_floyd( isljps_path *heap, size_t index ) {
 	size_t left = (index << 1) + 1;
 	size_t right = left + 1;
 	while ( left < heap->length ) {
@@ -216,7 +249,7 @@ static void isljps__heap_siftdown_floyd( isljps__heap *heap, size_t index ) {
 	isljps__heap_siftup( heap, index );
 }
 
-static void isljps__heap_siftdown( isljps__heap *heap, size_t index ) {
+static void isljps__heap_siftdown( isljps_path *heap, size_t index ) {
 	size_t left = (index << 1) + 1;
 	size_t right = left + 1;
 	while ( left < heap->length ) {
@@ -230,20 +263,15 @@ static void isljps__heap_siftdown( isljps__heap *heap, size_t index ) {
 	}
 }
 
-static isljps_status isljps__heap_enqueue( isljps__heap *heap, isljps_node *node ) {
-	size_t index = heap->length;
-	if ( heap->allocated <= heap->length ) {
-		if ( isljps__heap_grow( heap, heap->allocated * 2 ) != ISLJPS_OK ) {
-			return ISLJPS_ERROR_BAD_ALLOC;
-		}
+static isljps_status isljps__heap_enqueue( isljps_path *heap, isljps_node *node ) {
+	isljps_status status = isljps__path_push( heap, node );
+	if ( status == ISLJPS_OK ) {
+		isljps__heap_siftup( heap, heap->length-1 );
 	}
-	heap->nodes[index] = node;
-	heap->length++;
-	index = isljps__heap_siftup( heap, index );
-	return ISLJPS_OK;
+	return status;
 }
 
-static isljps_node *isljps__heap_dequeue( isljps__heap *heap ) {
+static isljps_node *isljps__heap_dequeue( isljps_path *heap ) {
 	if ( heap->length == 0 ) {
 		return NULL;
 	} else if ( heap->length == 1 ) {
@@ -257,10 +285,9 @@ static isljps_node *isljps__heap_dequeue( isljps__heap *heap ) {
 	}
 }
 
-static void isljps__heap_update( isljps__heap *heap, isljps_node *node ) {
+static void isljps__heap_update( isljps_path *heap, isljps_node *node ) {
 	isljps__heap_siftdown( heap, isljps__heap_siftup( heap, node->index ));
 }
-
 // End of binary heap implementation
 
 static isljps_result isljps__expand_path( isljps_graph *graph, isljps_node *start, isljps_node *finish ) {
@@ -270,17 +297,16 @@ static isljps_result isljps__expand_path( isljps_graph *graph, isljps_node *star
 		result.status = ISLJPS_TRIVIAL;
 		return result;
 	} else {
-		isljps_node **path = ISLJPS_MALLOC( allocated );	
 		isljps_node *node = finish;
 		isljps_node *parent = node->parent;
 
-		if ( path == NULL ) {
+		result.path = isljps__path_create( allocated );
+
+		if ( result.path == NULL ) {
 			result.status = ISLJPS_ERROR_BAD_ALLOC;
 			return result;
 		}
 
-		result.path = path;
-		int length = 0;
 		while ( parent != NULL ) {
 			isljps_coord x0 = node->x;
 			isljps_coord y0 = node->y;
@@ -292,23 +318,15 @@ static isljps_result isljps__expand_path( isljps_graph *graph, isljps_node *star
 			isljps_coord sy = y0 < y1 ? 1 : -1;
 			isljps_coord err = dx - dy;
 			isljps_coord e2;
-
-			if ( length+1 >= allocated ) {
-				path = ISLJPS_REALLOC( path, allocated * 2 * sizeof( *path ));
-				if ( path == NULL ) {
-					free( result.path );
-					result.path = NULL;
-					result.status = ISLJPS_ERROR_BAD_ALLOC;
-					return result;
-				} else {
-					result.path = path;
-				}
-				allocated = allocated * 2;
-			}
 			
 			// Perform Bresenham's line algorithm to interpolate nodes between jump nodes
 			while (x0 != x1 || y0 != y1) {
-				path[length++] = ISLJPS_GET_NODE( graph, x0, y0 );
+				result.status = isljps__path_push( result.path, ISLJPS_GET_NODE( graph, x0, y0 ));
+				if ( result.status != ISLJPS_OK ) {
+					isljps_destroy_path( result.path );
+					result.path = NULL;
+					return result;
+				}
 
 				e2 = 2 * err;
 				if (e2 > -dy) {
@@ -324,17 +342,48 @@ static isljps_result isljps__expand_path( isljps_graph *graph, isljps_node *star
 			node = parent;
 			parent = node->parent;
 		}
-		path[length++] = node;
+
+		result.status = isljps__path_push( result.path, node );
+		if ( result.status != ISLJPS_OK ) {
+			isljps_destroy_path( result.path );
+			result.path = NULL;
+			return result;
+		}
+
 		return result;
 	}
 }
 
 static isljps_node *isljps__jump( isljps_graph *graph, isljps_node *node, isljps_node *parent, isljps_node *finish, isljps_mask mask );
 
+static isljps_cost isljps__distance( isljps_node *node1, isljps_node *node2 ) {
+	isljps_coord dx = ( node1->x - node2->x );
+	isljps_coord dy = ( node1->y - node2->y );
+	return ISLJPS_SQRT( dx*dx + dy*dy );
+}
+
+static void isljps__clean_graph( isljps_graph *graph, isljps_path *used, isljps_path *open ) {
+	size_t i;
+	for ( i = 0; i < used->length; i++ ) {
+		isljps_node *node = used->nodes[i];
+		node->h = 0;
+		node->g = 0;
+		node->f = 0;
+		node->status = ISLJPS_NODE_DEFAULT;
+		node->parent = NULL;
+		node->index = 0;
+	}
+	isljps_destroy_path( used );
+	isljps_destroy_path( open );
+}
+
 isljps_result isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_node *finish, isljps_mask mask, isljps_properties *properties ) {
-	isljps__heap *openlist = isljps__heap_create( ISLJPS_MAX_NEIGHBORS );
+	isljps_path *openlist = isljps__path_create( ISLJPS_MAX_NEIGHBORS );
 	isljps_result result = {ISLJPS_OK,NULL};
 	isljps_status status = ISLJPS_OK;
+	size_t len = (size_t) isljps__distance( start, finish );
+	isljps_path *usedlist = NULL;
+	int used_count = 0;
 
 	start->g = 0;
 	start->f = 0;
@@ -344,10 +393,16 @@ isljps_result isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_
 		return result;
 	}
 
-	status = isljps__heap_enqueue( openlist, start );
-	if ( status != ISLJPS_OK ) {
-		result.status = status;
-		isljps__heap_destroy( openlist );
+	usedlist = isljps__path_create( 4 );
+	if ( usedlist == NULL ) {
+		isljps_destroy_path( openlist );
+		result.status = ISLJPS_ERROR_BAD_ALLOC;
+		return result;
+	}
+
+	result.status = isljps__heap_enqueue( openlist, start );
+	if ( result.status != ISLJPS_OK ) {
+		isljps__clean_graph( graph, usedlist, openlist );
 		return result;
 	}
 
@@ -362,7 +417,7 @@ isljps_result isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_
 		node->status |= ISLJPS_NODE_CLOSED;
 
 		if ( node == finish ) {
-			isljps__heap_destroy( openlist );
+			isljps__clean_graph( graph, usedlist, openlist );
 			return isljps__expand_path( graph, start, finish );
 		}
 
@@ -374,15 +429,21 @@ isljps_result isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_
 					isljps_cost d = properties->eval_jump_cost( graph, jump_node, node, mask );
 					isljps_cost ng = node->g + d;
 					if ( !(jump_node->status & ISLJPS_NODE_OPENED) || ng < jump_node->g ) {
+						if ( jump_node->h == 0 ) {
+							result.status = isljps__path_push( usedlist, jump_node );
+							if ( result.status != ISLJPS_OK ) {
+								isljps__clean_graph( graph, usedlist, openlist );
+								return result;
+							}
+							jump_node->h = properties->eval_heuristic( graph, node, jump_node, mask );
+						}
 						jump_node->g = ng;
-						jump_node->h = jump_node->h == 0 ? properties->eval_heuristic( graph, node, jump_node, mask ) : jump_node->h;
 						jump_node->f = jump_node->g + jump_node->h;
 						jump_node->parent = node;
 						if ( !(jump_node->status & ISLJPS_NODE_OPENED )) {
-							status = isljps__heap_enqueue( openlist, jump_node );
-							if ( status != ISLJPS_OK ) {
-								result.status = status;
-								isljps__heap_destroy( openlist );
+							result.status = isljps__heap_enqueue( openlist, jump_node );
+							if ( result.status != ISLJPS_OK ) {
+								isljps__clean_graph( graph, usedlist, openlist );
 								return result;
 							}
 							jump_node->status |= ISLJPS_NODE_OPENED;
@@ -396,7 +457,7 @@ isljps_result isljps_find_path( isljps_graph *graph, isljps_node *start, isljps_
 	}
 
 	result.status = ISLJPS_BLOCKED;
-	isljps__heap_destroy( openlist );
+	isljps__clean_graph( graph, usedlist, openlist );
 
 	return result;
 }
@@ -500,9 +561,7 @@ isljps_cost isljps_heuristic_manhattan( isljps_graph *graph, isljps_node *node1,
 }
 
 isljps_cost isljps_heuristic_euclidean( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask ) {
-	isljps_coord dx = ( node1->x - node2->x );
-	isljps_coord dy = ( node1->y - node2->y );
-	return ISLJPS_SQRT( dx*dx + dy*dy );
+	return isljps__distance( node1, node2 );
 }
 
 isljps_cost isljps_heuristic_chebyshev( isljps_graph *graph, isljps_node *node1, isljps_node *node2, isljps_mask mask ) {
